@@ -67,6 +67,8 @@ export interface RequestPayload {
   top_p: number;
   max_tokens?: number;
   max_completion_tokens?: number;
+  reasoning_effort?: string;
+  // O3 only
 }
 
 export interface DalleRequestPayload {
@@ -196,9 +198,9 @@ export class ChatGPTApi implements LLMApi {
     let requestPayload: RequestPayload | DalleRequestPayload;
 
     const isDalle3 = _isDalle3(options.config.model);
-    const isO1OrO3 =
-      options.config.model.startsWith("o1") ||
-      options.config.model.startsWith("o3");
+    const isO1 = options.config.model.startsWith("o1");
+    const isO3 = options.config.model.startsWith("o3");
+    const isO1OrO3 = isO1 || isO3;
     if (isDalle3) {
       const prompt = getMessageTextContent(
         options.messages.slice(-1)?.pop() as any,
@@ -242,9 +244,18 @@ export class ChatGPTApi implements LLMApi {
         requestPayload["max_completion_tokens"] = modelConfig.max_tokens;
       }
 
+      if (isO3) {
+        requestPayload["reasoning_effort"] = "high";
+        // make o3-mini defaults to high reasoning effort
+      }
+
       // add max_tokens to vision model
       if (visionModel) {
-        requestPayload["max_tokens"] = Math.max(modelConfig.max_tokens, 4000);
+        if (isO1) {
+          requestPayload["max_completion_tokens"] = modelConfig.max_tokens;
+        } else {
+          requestPayload["max_tokens"] = Math.max(modelConfig.max_tokens, 4000);
+        }
       }
     }
 
@@ -286,6 +297,11 @@ export class ChatGPTApi implements LLMApi {
           isDalle3 ? OpenaiPath.ImagePath : OpenaiPath.ChatPath,
         );
       }
+      // make a fetch request
+      const requestTimeoutId = setTimeout(
+        () => controller.abort(),
+        getTimeoutMSByModel(options.config.model),
+      );
       if (shouldStream) {
         let index = -1;
         const [tools, funcs] = usePluginStore
@@ -392,12 +408,6 @@ export class ChatGPTApi implements LLMApi {
           signal: controller.signal,
           headers: getHeaders(),
         };
-
-        // make a fetch request
-        const requestTimeoutId = setTimeout(
-          () => controller.abort(),
-          getTimeoutMSByModel(options.config.model),
-        );
 
         const res = await fetch(chatPath, chatPayload);
         clearTimeout(requestTimeoutId);
